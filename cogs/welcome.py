@@ -9,18 +9,11 @@ from utils.permissions import is_staff_interaction
 
 logger = logging.getLogger("Welcome")
 
-# URL da imagem de banner/thumbnail do embed de boas-vindas
-WELCOME_THUMBNAIL_URL = (
-    "https://media.discordapp.net/attachments/1540452943004835862/"
-    "1551217719532064888/WhatsApp_Image_2026-03-22_at_15.06.19.jpeg"
-    "?ex=6ab12b94&is=6aafda14"
-    "&hm=361e5e01dfe1858ad8c65fb43a739726aeea115d4d898ac625dd15407037525d"
-    "&=&format=webp"
-)
+EMBED_COLOR = discord.Color(0xe03f3f)
 
 
 def build_welcome_embed(member: discord.Member) -> discord.Embed:
-    """Constrói o embed de boas-vindas com a identidade visual do Cards of Doons."""
+    """Constrói o embed de boas-vindas."""
 
     embed = discord.Embed(
         title="🎴 Bem-vindo ao Cards of Doons!",
@@ -31,11 +24,11 @@ def build_welcome_embed(member: discord.Member) -> discord.Embed:
             "**eventos** e **anúncios** do jogo, além de conversar com a comunidade.\n\n"
             "Confira as informações do servidor e prepare-se para jogar. 🃏"
         ),
-        color=discord.Color.from_rgb(138, 43, 226),
+        color=EMBED_COLOR,
     )
 
-    # Thumbnail principal — imagem do Cards of Doons
-    embed.set_thumbnail(url=WELCOME_THUMBNAIL_URL)
+    # Thumbnail = foto de perfil do membro
+    embed.set_thumbnail(url=member.display_avatar.url)
 
     # Author com ícone do servidor
     if member.guild.icon:
@@ -46,7 +39,6 @@ def build_welcome_embed(member: discord.Member) -> discord.Embed:
     else:
         embed.set_author(name="Cards of Doons")
 
-    # Campos informativos
     embed.add_field(
         name="📢 Anúncios & Atualizações",
         value="Fique por dentro de tudo que acontece no jogo.",
@@ -63,7 +55,6 @@ def build_welcome_embed(member: discord.Member) -> discord.Embed:
         inline=True
     )
 
-    # Footer com contagem de membros
     embed.set_footer(
         text=f"Membro #{member.guild.member_count} • Cards of Doons",
         icon_url=member.guild.icon.url if member.guild.icon else None
@@ -136,7 +127,7 @@ class Welcome(commands.Cog):
 
         if not isinstance(channel, discord.TextChannel):
             await interaction.response.send_message(
-                f"❌ O canal de boas-vindas não é um canal de texto válido.",
+                "❌ O canal de boas-vindas não é um canal de texto válido.",
                 ephemeral=True
             )
             return
