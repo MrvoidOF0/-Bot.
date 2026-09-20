@@ -51,7 +51,7 @@ class Commands(commands.Cog):
         embed.add_field(
             name="🎫 `/setup_ticket`",
             value=(
-                "Envia o painel de suporte com o botão de abertura de tickets no canal atual.\n"
+                "Envia o painel de suporte com botão de abertura de tickets no canal atual.\n"
                 "**Quem pode usar:** Apenas Staff / Administradores."
             ),
             inline=False
@@ -60,7 +60,7 @@ class Commands(commands.Cog):
         embed.add_field(
             name="📣 `/painel_suporte`",
             value=(
-                "Gera um painel de suporte com botão para abrir canal de suporte.\n"
+                "Gera um painel de suporte com botão para abrir canal de suporte privado.\n"
                 "**Quem pode usar:** Apenas Staff / Administradores."
             ),
             inline=False
@@ -71,6 +71,15 @@ class Commands(commands.Cog):
             value=(
                 "Testa a IA de suporte com uma pergunta direta.\n"
                 "**Quem pode usar:** Apenas Staff / Administradores."
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="🔄 `/sync`",
+            value=(
+                "Força a sincronização dos slash commands.\n"
+                "**Quem pode usar:** Apenas Administradores."
             ),
             inline=False
         )
@@ -135,6 +144,45 @@ class Commands(commands.Cog):
             f"{interaction.user} (ID: {interaction.user.id}) "
             f"testou a IA com: {pergunta[:80]}"
         )
+
+    @app_commands.command(
+        name="sync",
+        description="[ADMIN] Força a sincronização dos slash commands com o Discord."
+    )
+    async def sync_commands(self, interaction: discord.Interaction):
+        """Sincroniza os slash commands manualmente. Apenas administradores."""
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ Apenas administradores podem usar este comando.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            # Sincroniza globalmente
+            synced = await self.bot.tree.sync()
+
+            cmd_list = "\n".join(f"• `/{c.name}`" for c in synced)
+
+            await interaction.followup.send(
+                f"✅ **{len(synced)} comando(s) sincronizado(s):**\n{cmd_list}",
+                ephemeral=True
+            )
+
+            logger.info(
+                f"{interaction.user} forçou sync. "
+                f"{len(synced)} comandos sincronizados: "
+                f"{[c.name for c in synced]}"
+            )
+
+        except discord.HTTPException as e:
+            await interaction.followup.send(
+                f"❌ Erro ao sincronizar: `{e}`",
+                ephemeral=True
+            )
+            logger.error(f"Erro no /sync: {e}", exc_info=True)
 
 
 async def setup(bot: commands.Bot):
