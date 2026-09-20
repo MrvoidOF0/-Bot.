@@ -16,12 +16,12 @@ logger = logging.getLogger("Tickets")
 # Estrutura: {user_id: channel_id}
 active_tickets: dict[int, int] = {}
 
-# Tickets com IA desativada (staff assumiu): {channel_id: True}
+# Tickets com IA desativada (staff assumiu): {channel_id}
 ai_disabled_tickets: set[int] = set()
 
 
 # ─────────────────────────────────────────
-# Views
+# Views persistentes
 # ─────────────────────────────────────────
 
 class SetupTicketView(discord.ui.View):
@@ -132,6 +132,7 @@ class ReactivateAIView(discord.ui.View):
             return
 
         channel_id = interaction.channel_id
+
         if channel_id in ai_disabled_tickets:
             ai_disabled_tickets.discard(channel_id)
             await interaction.response.send_message(
@@ -167,7 +168,7 @@ async def handle_open_ticket(interaction: discord.Interaction):
             )
             return
         else:
-            # Canal não existe mais, remove do registro
+            # Canal foi deletado manualmente, remove do registro
             del active_tickets[user.id]
 
     # Busca a categoria dos tickets
@@ -182,6 +183,7 @@ async def handle_open_ticket(interaction: discord.Interaction):
         )
         return
 
+    # Deferir a resposta antes de operações demoradas
     await interaction.response.defer(ephemeral=True)
 
     # Define as permissões do canal
@@ -195,7 +197,8 @@ async def handle_open_ticket(interaction: discord.Interaction):
             view_channel=True,
             send_messages=True,
             read_messages=True,
-            read_message_history=True
+            read_message_history=True,
+            attach_files=True
         ),
         guild.me: discord.PermissionOverwrite(
             view_channel=True,
@@ -203,18 +206,20 @@ async def handle_open_ticket(interaction: discord.Interaction):
             read_messages=True,
             read_message_history=True,
             manage_channels=True,
-            manage_messages=True
+            manage_messages=True,
+            embed_links=True
         ),
     }
 
-    # Adiciona permissões para staff (roles com manage_guild)
+    # Adiciona permissões para roles de staff
     for role in guild.roles:
         if role.permissions.manage_guild or role.permissions.administrator:
             overwrites[role] = discord.PermissionOverwrite(
                 view_channel=True,
                 send_messages=True,
                 read_messages=True,
-                read_message_history=True
+                read_message_history=True,
+                manage_messages=True
             )
 
     # Sanitiza o nome do canal
@@ -222,6 +227,10 @@ async def handle_open_ticket(interaction: discord.Interaction):
         c if c.isalnum() or c in "-_" else "-"
         for c in user.display_name.lower()
     ).strip("-")[:20]
+
+    # Garante que não fique vazio após sanitização
+    if not safe_name:
+        safe_name = str(user.id)[:10]
 
     channel_name = f"ticket-{safe_name}"
 
@@ -245,17 +254,17 @@ async def handle_open_ticket(interaction: discord.Interaction):
         )
         return
 
-    # Registra o ticket
+    # Registra o ticket ativo
     active_tickets[user.id] = ticket_channel.id
-    logger.info(f"Ticket criado: {ticket_channel.name} para {user}.")
+    logger.info(f"Ticket criado: {ticket_channel.name} para {user} (ID: {user.id}).")
 
-    # Envia a mensagem inicial no ticket
+    # Monta o embed de abertura do ticket
     embed = discord.Embed(
         title="🎫 Atendimento — Cards of Doons",
         description=(
             f"Olá, {user.mention}!\n\n"
             "Explique seu **problema** ou **dúvida** com o máximo de detalhes possível.\n\n"
-            "🤖 Um atendente virtual irá ajudar com sua solicitação.\n"
+            "🤖 Um atendente virtual irá responder automaticamente.\n"
             "🛡️ Você também pode solicitar atendimento direto da equipe.\n\n"
             "⚠️ **Nunca envie senhas, tokens ou informações pessoais.**"
         ),
@@ -274,7 +283,7 @@ async def handle_open_ticket(interaction: discord.Interaction):
         ephemeral=True
     )
 
-    # Log
+    # Envia log
     await send_log(
         guild=guild,
         bot=interaction.client,
@@ -287,10 +296,16 @@ async def handle_close_ticket_request(interaction: discord.Interaction):
     """Pede confirmação antes de fechar o ticket."""
     channel = interaction.channel
 
-    # Verifica se é um canal de ticket válido
+    if not isinstance(channel, discord.TextChannel):
+        await interaction.response.send_message(
+            "❌ Erro ao identificar o canal.",
+            ephemeral=True
+        )
+        return
+
     if not channel.name.startswith("ticket-"):
         await interaction.response.send_message(
-            "❌ Este comando só pode ser usado dentro de um ticket.",
+            "❌ Este botão só pode ser usado dentro de um ticket.",
             ephemeral=True
         )
         return
@@ -304,12 +319,14 @@ async def handle_close_ticket_request(interaction: discord.Interaction):
 
 
 async def handle_close_ticket_confirmed(interaction: discord.Interaction):
-    """Fecha e deleta o canal de ticket."""
+    """Fecha e deleta o canal de ticket após confirmação."""
+    import asyncio
+
     channel = interaction.channel
     guild = interaction.guild
     closer = interaction.user
 
-    # Encontra o dono do ticket
+    # Encontra o dono do ticket pelo channel_id
     owner_id = None
     for uid, cid in list(active_tickets.items()):
         if cid == channel.id:
@@ -321,24 +338,31 @@ async def handle_close_ticket_confirmed(interaction: discord.Interaction):
         view=None
     )
 
-    # Envia mensagem final
+    # Embed de encerramento
     close_embed = discord.Embed(
-        title="🔒 Ticket Fechado",
-        description=f"Este ticket foi fechado por {closer.mention}.\nO canal será deletado em instantes.",
+        title="🔒 Ticket Encerrado",
+        description=(
+            f"Este ticket foi fechado por {closer.mention}.\n"
+            "O canal será deletado em instantes."
+        ),
         color=discord.Color.red()
     )
-    await channel.send(embed=close_embed)
+    close_embed.set_footer(text="Cards of Doons | Suporte")
 
-    # Remove do registro
+    try:
+        await channel.send(embed=close_embed)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+    # Remove dos registros
     if owner_id and owner_id in active_tickets:
         del active_tickets[owner_id]
 
-    if channel.id in ai_disabled_tickets:
-        ai_disabled_tickets.discard(channel.id)
+    ai_disabled_tickets.discard(channel.id)
 
-    logger.info(f"Ticket {channel.name} fechado por {closer}.")
+    logger.info(f"Ticket {channel.name} fechado por {closer} (ID: {closer.id}).")
 
-    # Log
+    # Log antes de deletar
     await send_log(
         guild=guild,
         bot=interaction.client,
@@ -346,7 +370,6 @@ async def handle_close_ticket_confirmed(interaction: discord.Interaction):
         color=discord.Color.red()
     )
 
-    import asyncio
     await asyncio.sleep(3)
 
     try:
@@ -363,9 +386,16 @@ async def handle_call_staff(interaction: discord.Interaction):
     guild = interaction.guild
     user = interaction.user
 
+    if not isinstance(channel, discord.TextChannel):
+        await interaction.response.send_message(
+            "❌ Erro ao identificar o canal.",
+            ephemeral=True
+        )
+        return
+
     if not channel.name.startswith("ticket-"):
         await interaction.response.send_message(
-            "❌ Este comando só pode ser usado dentro de um ticket.",
+            "❌ Este botão só pode ser usado dentro de um ticket.",
             ephemeral=True
         )
         return
@@ -373,12 +403,13 @@ async def handle_call_staff(interaction: discord.Interaction):
     # Desativa a IA neste ticket
     ai_disabled_tickets.add(channel.id)
 
-    # Monta a menção de staff
+    # Busca menção de role de staff
     staff_mention = ""
     for role in guild.roles:
         if role.permissions.manage_guild or role.permissions.administrator:
-            staff_mention = role.mention
-            break
+            if not role.is_bot_managed() and not role.is_integration():
+                staff_mention = role.mention
+                break
 
     embed = discord.Embed(
         title="🛡️ Atendimento Humano Solicitado",
@@ -389,16 +420,18 @@ async def handle_call_staff(interaction: discord.Interaction):
         ),
         color=discord.Color.orange()
     )
+    embed.set_footer(text="Cards of Doons | Suporte")
+
+    content = f"{staff_mention} — Atendimento solicitado!" if staff_mention else None
 
     await interaction.response.send_message(
-        content=f"{staff_mention} — Atendimento solicitado!" if staff_mention else "🛡️ Atendimento solicitado!",
+        content=content,
         embed=embed,
         view=ReactivateAIView()
     )
 
-    logger.info(f"Staff chamado no ticket {channel.name} por {user}.")
+    logger.info(f"Staff chamado no ticket {channel.name} por {user} (ID: {user.id}).")
 
-    # Log
     await send_log(
         guild=guild,
         bot=interaction.client,
@@ -449,10 +482,10 @@ class Tickets(commands.Cog):
 
     @app_commands.command(
         name="setup_ticket",
-        description="[STAFF] Envia o painel de abertura de tickets."
+        description="[STAFF] Envia o painel de abertura de tickets neste canal."
     )
     async def setup_ticket(self, interaction: discord.Interaction):
-        """Envia o painel de suporte. Apenas staff."""
+        """Envia o painel de suporte com o botão de ticket. Apenas staff."""
         if not is_staff_interaction(interaction):
             await interaction.response.send_message(
                 "❌ Você não tem permissão para usar este comando.",
@@ -460,10 +493,18 @@ class Tickets(commands.Cog):
             )
             return
 
+        # Confirma ao executor que o comando foi recebido (ephemeral)
+        await interaction.response.send_message(
+            "✅ Enviando o painel de suporte...",
+            ephemeral=True
+        )
+
+        # Monta o embed do painel
         embed = discord.Embed(
             title="🎫 SUPORTE — CARDS OF DOONS",
             description=(
-                "Precisa de ajuda? Abra um ticket e explique seu problema para receber atendimento.\n\n"
+                "Precisa de ajuda? Abra um ticket e explique seu problema "
+                "para receber atendimento.\n\n"
                 "🤖 O atendimento automático poderá ajudar com dúvidas comuns.\n"
                 "🛡️ Caso necessário, a equipe poderá assumir o atendimento.\n\n"
                 "Clique no botão abaixo para abrir seu ticket."
@@ -474,14 +515,19 @@ class Tickets(commands.Cog):
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
 
-        embed.set_footer(text="Cards of Doons | Suporte • Um ticket por usuário")
+        embed.set_footer(
+            text="Cards of Doons | Suporte • Um ticket por usuário"
+        )
 
-        await interaction.response.send_message(
+        # Envia o painel publicamente no canal onde o comando foi usado
+        await interaction.channel.send(
             embed=embed,
             view=SetupTicketView()
         )
 
-        logger.info(f"{interaction.user} executou /setup_ticket em {interaction.channel}.")
+        logger.info(
+            f"{interaction.user} executou /setup_ticket em #{interaction.channel.name}."
+        )
 
 
 async def setup(bot: commands.Bot):
