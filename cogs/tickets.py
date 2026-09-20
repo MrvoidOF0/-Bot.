@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import discord
@@ -14,10 +15,7 @@ EMBED_COLOR = discord.Color(0xe03f3f)
 # ─────────────────────────────────────────
 # Estado em memória
 # ─────────────────────────────────────────
-# {user_id: channel_id}
 active_tickets: dict[int, int] = {}
-
-# Tickets com IA desativada: {channel_id}
 ai_disabled_tickets: set[int] = set()
 
 
@@ -131,11 +129,16 @@ class ReactivateAIView(discord.ui.View):
         if channel_id in ai_disabled_tickets:
             ai_disabled_tickets.discard(channel_id)
             embed = discord.Embed(
-                description="🤖 A IA de suporte foi **reativada** neste ticket e voltará a responder automaticamente.",
+                description=(
+                    "🤖 A IA de suporte foi **reativada** neste ticket "
+                    "e voltará a responder automaticamente."
+                ),
                 color=EMBED_COLOR
             )
             await interaction.response.send_message(embed=embed)
-            logger.info(f"IA reativada no ticket {channel_id} por {interaction.user}.")
+            logger.info(
+                f"IA reativada no ticket {channel_id} por {interaction.user}."
+            )
         else:
             await interaction.response.send_message(
                 "ℹ️ A IA já está ativa neste ticket.",
@@ -148,11 +151,9 @@ class ReactivateAIView(discord.ui.View):
 # ─────────────────────────────────────────
 
 async def handle_open_ticket(interaction: discord.Interaction):
-    """Cria um novo canal de ticket para o usuário."""
     user = interaction.user
     guild = interaction.guild
 
-    # Verifica ticket já aberto
     if user.id in active_tickets:
         existing_channel = guild.get_channel(active_tickets[user.id])
         if existing_channel:
@@ -165,7 +166,6 @@ async def handle_open_ticket(interaction: discord.Interaction):
         else:
             del active_tickets[user.id]
 
-    # Busca a categoria
     category = guild.get_channel(config.TICKET_CATEGORY_ID)
     if category is None or not isinstance(category, discord.CategoryChannel):
         await interaction.response.send_message(
@@ -177,7 +177,6 @@ async def handle_open_ticket(interaction: discord.Interaction):
 
     await interaction.response.defer(ephemeral=True)
 
-    # Permissões do canal
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(
             view_channel=False,
@@ -204,15 +203,15 @@ async def handle_open_ticket(interaction: discord.Interaction):
 
     for role in guild.roles:
         if role.permissions.manage_guild or role.permissions.administrator:
-            overwrites[role] = discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                read_messages=True,
-                read_message_history=True,
-                manage_messages=True
-            )
+            if not role.is_bot_managed() and not role.is_integration():
+                overwrites[role] = discord.PermissionOverwrite(
+                    view_channel=True,
+                    send_messages=True,
+                    read_messages=True,
+                    read_message_history=True,
+                    manage_messages=True
+                )
 
-    # Nome do canal sanitizado
     safe_name = "".join(
         c if c.isalnum() or c in "-_" else "-"
         for c in user.display_name.lower()
@@ -244,7 +243,9 @@ async def handle_open_ticket(interaction: discord.Interaction):
         return
 
     active_tickets[user.id] = ticket_channel.id
-    logger.info(f"Ticket criado: #{ticket_channel.name} para {user} (ID: {user.id}).")
+    logger.info(
+        f"Ticket criado: #{ticket_channel.name} para {user} (ID: {user.id})."
+    )
 
     embed = discord.Embed(
         title="🎫 Atendimento — Cards of Doons",
@@ -273,16 +274,18 @@ async def handle_open_ticket(interaction: discord.Interaction):
     await send_log(
         guild=guild,
         bot=interaction.client,
-        description=f"🎫 **Ticket aberto** por {user.mention}\nCanal: {ticket_channel.mention}",
-        color=EMBED_COLOR
+        description=(
+            f"🎫 **Ticket aberto** por {user.mention}\n"
+            f"Canal: {ticket_channel.mention}"
+        ),
     )
 
 
 async def handle_close_ticket_request(interaction: discord.Interaction):
-    """Pede confirmação antes de fechar."""
     channel = interaction.channel
 
-    if not isinstance(channel, discord.TextChannel) or not channel.name.startswith("ticket-"):
+    if not isinstance(channel, discord.TextChannel) or \
+            not channel.name.startswith("ticket-"):
         await interaction.response.send_message(
             "❌ Este botão só pode ser usado dentro de um ticket.",
             ephemeral=True
@@ -298,9 +301,6 @@ async def handle_close_ticket_request(interaction: discord.Interaction):
 
 
 async def handle_close_ticket_confirmed(interaction: discord.Interaction):
-    """Fecha e deleta o canal."""
-    import asyncio
-
     channel = interaction.channel
     guild = interaction.guild
     closer = interaction.user
@@ -336,13 +336,17 @@ async def handle_close_ticket_confirmed(interaction: discord.Interaction):
 
     ai_disabled_tickets.discard(channel.id)
 
-    logger.info(f"Ticket #{channel.name} fechado por {closer} (ID: {closer.id}).")
+    logger.info(
+        f"Ticket #{channel.name} fechado por {closer} (ID: {closer.id})."
+    )
 
     await send_log(
         guild=guild,
         bot=interaction.client,
-        description=f"🔒 **Ticket fechado** por {closer.mention}\nCanal: `{channel.name}`",
-        color=discord.Color(0xe03f3f)
+        description=(
+            f"🔒 **Ticket fechado** por {closer.mention}\n"
+            f"Canal: `{channel.name}`"
+        ),
     )
 
     await asyncio.sleep(3)
@@ -356,12 +360,12 @@ async def handle_close_ticket_confirmed(interaction: discord.Interaction):
 
 
 async def handle_call_staff(interaction: discord.Interaction):
-    """Notifica a equipe e desativa a IA."""
     channel = interaction.channel
     guild = interaction.guild
     user = interaction.user
 
-    if not isinstance(channel, discord.TextChannel) or not channel.name.startswith("ticket-"):
+    if not isinstance(channel, discord.TextChannel) or \
+            not channel.name.startswith("ticket-"):
         await interaction.response.send_message(
             "❌ Este botão só pode ser usado dentro de um ticket.",
             ephemeral=True
@@ -388,7 +392,10 @@ async def handle_call_staff(interaction: discord.Interaction):
     )
     embed.set_footer(text="Cards of Doons | Suporte")
 
-    content = f"{staff_mention} — Atendimento solicitado!" if staff_mention else None
+    content = (
+        f"{staff_mention} — Atendimento solicitado!"
+        if staff_mention else None
+    )
 
     await interaction.response.send_message(
         content=content,
@@ -396,23 +403,25 @@ async def handle_call_staff(interaction: discord.Interaction):
         view=ReactivateAIView()
     )
 
-    logger.info(f"Staff chamado em #{channel.name} por {user} (ID: {user.id}).")
+    logger.info(
+        f"Staff chamado em #{channel.name} por {user} (ID: {user.id})."
+    )
 
     await send_log(
         guild=guild,
         bot=interaction.client,
-        description=f"🛡️ **Staff chamado** por {user.mention}\nCanal: {channel.mention}",
-        color=discord.Color(0xe03f3f)
+        description=(
+            f"🛡️ **Staff chamado** por {user.mention}\n"
+            f"Canal: {channel.mention}"
+        ),
     )
 
 
 async def send_log(
     guild: discord.Guild,
     bot: commands.Bot,
-    description: str,
-    color: discord.Color
+    description: str
 ):
-    """Envia log no canal configurado."""
     if not config.LOG_CHANNEL_ID:
         return
 
@@ -420,7 +429,10 @@ async def send_log(
     if log_channel is None:
         return
 
-    embed = discord.Embed(description=description, color=color)
+    embed = discord.Embed(
+        description=description,
+        color=EMBED_COLOR
+    )
     embed.set_footer(text="Cards of Doons | Log")
 
     try:
@@ -453,10 +465,7 @@ class Tickets(commands.Cog):
             )
             return
 
-        await interaction.response.send_message(
-            "✅ Painel de suporte enviado.",
-            ephemeral=True
-        )
+        await interaction.response.defer(ephemeral=True)
 
         embed = discord.Embed(
             title="🎫 SUPORTE — CARDS OF DOONS",
@@ -473,12 +482,23 @@ class Tickets(commands.Cog):
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
 
-        embed.set_footer(text="Cards of Doons | Suporte • Um ticket por usuário")
+        embed.set_footer(
+            text="Cards of Doons | Suporte • Um ticket por usuário"
+        )
 
-        await interaction.channel.send(embed=embed, view=SetupTicketView())
+        await interaction.channel.send(
+            embed=embed,
+            view=SetupTicketView()
+        )
+
+        await interaction.followup.send(
+            "✅ Painel de tickets enviado com sucesso.",
+            ephemeral=True
+        )
 
         logger.info(
-            f"{interaction.user} executou /setup_ticket em #{interaction.channel.name}."
+            f"{interaction.user} executou /setup_ticket "
+            f"em #{interaction.channel.name}."
         )
 
 
