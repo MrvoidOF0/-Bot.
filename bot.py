@@ -2,7 +2,6 @@ import discord
 from discord.ext import commands
 import asyncio
 import logging
-import os
 import sys
 
 from utils.config import Config
@@ -30,7 +29,6 @@ class CardsOfDoonsBot(commands.Bot):
             command_prefix="!cod_",
             intents=intents,
             help_command=None,
-            application_id=None
         )
 
     async def setup_hook(self):
@@ -49,20 +47,26 @@ class CardsOfDoonsBot(commands.Bot):
                 await self.load_extension(cog)
                 logger.info(f"  ✅ {cog} carregado.")
             except Exception as e:
-                logger.error(f"  ❌ Erro ao carregar {cog}: {e}")
+                logger.error(f"  ❌ Erro ao carregar {cog}: {e}", exc_info=True)
 
-        logger.info("Sincronizando slash commands...")
+        logger.info("Sincronizando slash commands globalmente...")
         try:
             synced = await self.tree.sync()
-            logger.info(f"  ✅ {len(synced)} comando(s) sincronizado(s).")
+            logger.info(f"  ✅ {len(synced)} comando(s) sincronizado(s) globalmente.")
+            for cmd in synced:
+                logger.info(f"     → /{cmd.name}")
         except Exception as e:
-            logger.error(f"  ❌ Erro ao sincronizar comandos: {e}")
+            logger.error(f"  ❌ Erro ao sincronizar comandos: {e}", exc_info=True)
 
     async def on_ready(self):
         logger.info("─" * 50)
         logger.info(f"Bot online: {self.user} (ID: {self.user.id})")
         logger.info(f"Servidores: {len(self.guilds)}")
         logger.info("─" * 50)
+
+        # Lista todos os comandos registrados na árvore
+        cmds = [c.name for c in self.tree.get_commands()]
+        logger.info(f"Comandos registrados na tree: {cmds}")
 
         await self.change_presence(
             activity=discord.Activity(
@@ -80,6 +84,29 @@ class CardsOfDoonsBot(commands.Bot):
 
     async def on_error(self, event: str, *args, **kwargs):
         logger.error(f"Erro no evento '{event}':", exc_info=True)
+
+    async def on_app_command_error(
+        self,
+        interaction: discord.Interaction,
+        error: discord.app_commands.AppCommandError
+    ):
+        logger.error(
+            f"Erro no comando /{interaction.command.name if interaction.command else 'desconhecido'}: {error}",
+            exc_info=True
+        )
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Ocorreu um erro ao executar este comando. Tente novamente.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    "❌ Ocorreu um erro ao executar este comando. Tente novamente.",
+                    ephemeral=True
+                )
+        except Exception:
+            pass
 
 
 async def main():
