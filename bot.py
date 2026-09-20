@@ -7,9 +7,6 @@ import sys
 
 from utils.config import Config
 
-# ─────────────────────────────────────────
-# Configuração de logging
-# ─────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -21,19 +18,12 @@ logging.basicConfig(
 
 logger = logging.getLogger("CardsOfDoons")
 
-
-# ─────────────────────────────────────────
-# Intents
-# ─────────────────────────────────────────
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 intents.guilds = True
 
 
-# ─────────────────────────────────────────
-# Bot
-# ─────────────────────────────────────────
 class CardsOfDoonsBot(commands.Bot):
     def __init__(self):
         super().__init__(
@@ -44,7 +34,6 @@ class CardsOfDoonsBot(commands.Bot):
         )
 
     async def setup_hook(self):
-        """Carrega todos os cogs e sincroniza os slash commands."""
         logger.info("Carregando cogs...")
 
         cogs = [
@@ -52,6 +41,7 @@ class CardsOfDoonsBot(commands.Bot):
             "cogs.tickets",
             "cogs.commands",
             "cogs.support_ai",
+            "cogs.painel_suporte",
         ]
 
         for cog in cogs:
@@ -71,7 +61,7 @@ class CardsOfDoonsBot(commands.Bot):
     async def on_ready(self):
         logger.info("─" * 50)
         logger.info(f"Bot online: {self.user} (ID: {self.user.id})")
-        logger.info(f"Servidores conectados: {len(self.guilds)}")
+        logger.info(f"Servidores: {len(self.guilds)}")
         logger.info("─" * 50)
 
         await self.change_presence(
@@ -83,18 +73,15 @@ class CardsOfDoonsBot(commands.Bot):
         )
 
     async def on_disconnect(self):
-        logger.warning("Bot desconectado do Discord. Tentando reconectar...")
+        logger.warning("Bot desconectado. Tentando reconectar...")
 
     async def on_resumed(self):
-        logger.info("Conexão retomada com sucesso.")
+        logger.info("Conexão retomada.")
 
     async def on_error(self, event: str, *args, **kwargs):
         logger.error(f"Erro no evento '{event}':", exc_info=True)
 
 
-# ─────────────────────────────────────────
-# Entry point
-# ─────────────────────────────────────────
 async def main():
     config = Config()
 
@@ -103,7 +90,7 @@ async def main():
         sys.exit(1)
 
     if not config.GROQ_API_KEY:
-        logger.warning("GROQ_API_KEY não definida. A IA de suporte ficará indisponível.")
+        logger.warning("GROQ_API_KEY não definida. A IA ficará indisponível.")
 
     bot = CardsOfDoonsBot()
 
@@ -111,12 +98,12 @@ async def main():
         logger.info("Iniciando bot...")
         await bot.start(config.DISCORD_TOKEN)
     except discord.LoginFailure:
-        logger.critical("Token inválido. Verifique a variável DISCORD_TOKEN.")
+        logger.critical("Token inválido. Verifique DISCORD_TOKEN.")
         sys.exit(1)
     except KeyboardInterrupt:
-        logger.info("Encerrando bot por solicitação do usuário.")
+        logger.info("Encerrando por solicitação do usuário.")
     except Exception as e:
-        logger.critical(f"Erro fatal ao iniciar o bot: {e}", exc_info=True)
+        logger.critical(f"Erro fatal: {e}", exc_info=True)
         sys.exit(1)
     finally:
         if not bot.is_closed():
