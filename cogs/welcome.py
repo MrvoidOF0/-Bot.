@@ -9,9 +9,19 @@ from utils.permissions import is_staff_interaction
 
 logger = logging.getLogger("Welcome")
 
+# URL da imagem de banner/thumbnail do embed de boas-vindas
+WELCOME_THUMBNAIL_URL = (
+    "https://media.discordapp.net/attachments/1540452943004835862/"
+    "1551217719532064888/WhatsApp_Image_2026-03-22_at_15.06.19.jpeg"
+    "?ex=6ab12b94&is=6aafda14"
+    "&hm=361e5e01dfe1858ad8c65fb43a739726aeea115d4d898ac625dd15407037525d"
+    "&=&format=webp"
+)
+
 
 def build_welcome_embed(member: discord.Member) -> discord.Embed:
-    """Constrói o embed de boas-vindas."""
+    """Constrói o embed de boas-vindas com a identidade visual do Cards of Doons."""
+
     embed = discord.Embed(
         title="🎴 Bem-vindo ao Cards of Doons!",
         description=(
@@ -24,14 +34,19 @@ def build_welcome_embed(member: discord.Member) -> discord.Embed:
         color=discord.Color.from_rgb(138, 43, 226),
     )
 
-    embed.set_thumbnail(url=member.display_avatar.url)
+    # Thumbnail principal — imagem do Cards of Doons
+    embed.set_thumbnail(url=WELCOME_THUMBNAIL_URL)
 
+    # Author com ícone do servidor
     if member.guild.icon:
         embed.set_author(
             name="Cards of Doons",
             icon_url=member.guild.icon.url
         )
+    else:
+        embed.set_author(name="Cards of Doons")
 
+    # Campos informativos
     embed.add_field(
         name="📢 Anúncios & Atualizações",
         value="Fique por dentro de tudo que acontece no jogo.",
@@ -48,13 +63,10 @@ def build_welcome_embed(member: discord.Member) -> discord.Embed:
         inline=True
     )
 
+    # Footer com contagem de membros
     embed.set_footer(
         text=f"Membro #{member.guild.member_count} • Cards of Doons",
         icon_url=member.guild.icon.url if member.guild.icon else None
-    )
-
-    embed.set_image(
-        url="https://i.imgur.com/placeholder_banner.png"
     )
 
     return embed
@@ -66,23 +78,34 @@ class Welcome(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        """Dispara quando um novo membro entra no servidor."""
+        """Dispara automaticamente quando um novo membro entra no servidor."""
         channel = self.bot.get_channel(config.WELCOME_CHANNEL_ID)
 
         if channel is None:
             logger.warning(
-                f"Canal de boas-vindas (ID: {config.WELCOME_CHANNEL_ID}) não encontrado. "
+                f"Canal de boas-vindas não encontrado (ID: {config.WELCOME_CHANNEL_ID}). "
                 "Verifique a variável WELCOME_CHANNEL_ID."
+            )
+            return
+
+        if not isinstance(channel, discord.TextChannel):
+            logger.warning(
+                f"O canal de boas-vindas (ID: {config.WELCOME_CHANNEL_ID}) "
+                "não é um canal de texto válido."
             )
             return
 
         try:
             embed = build_welcome_embed(member)
             await channel.send(embed=embed)
-            logger.info(f"Boas-vindas enviadas para {member} no canal {channel.name}.")
+            logger.info(
+                f"Boas-vindas enviadas para {member} (ID: {member.id}) "
+                f"no canal #{channel.name}."
+            )
         except discord.Forbidden:
             logger.error(
-                f"Sem permissão para enviar mensagem no canal de boas-vindas (ID: {config.WELCOME_CHANNEL_ID})."
+                f"Sem permissão para enviar mensagem no canal de boas-vindas "
+                f"(ID: {config.WELCOME_CHANNEL_ID})."
             )
         except discord.HTTPException as e:
             logger.error(f"Erro HTTP ao enviar boas-vindas: {e}")
@@ -92,7 +115,7 @@ class Welcome(commands.Cog):
         description="[STAFF] Envia uma simulação da mensagem de boas-vindas."
     )
     async def testwelcome(self, interaction: discord.Interaction):
-        """Comando de teste da mensagem de boas-vindas. Apenas staff."""
+        """Simula a mensagem de boas-vindas no canal configurado. Apenas staff."""
         if not is_staff_interaction(interaction):
             await interaction.response.send_message(
                 "❌ Você não tem permissão para usar este comando.",
@@ -104,8 +127,16 @@ class Welcome(commands.Cog):
 
         if channel is None:
             await interaction.response.send_message(
-                f"❌ Canal de boas-vindas não encontrado (ID: `{config.WELCOME_CHANNEL_ID}`).\n"
+                f"❌ Canal de boas-vindas não encontrado.\n"
+                f"ID configurado: `{config.WELCOME_CHANNEL_ID}`\n"
                 "Verifique a variável de ambiente `WELCOME_CHANNEL_ID`.",
+                ephemeral=True
+            )
+            return
+
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                f"❌ O canal de boas-vindas não é um canal de texto válido.",
                 ephemeral=True
             )
             return
@@ -116,10 +147,13 @@ class Welcome(commands.Cog):
             embed = build_welcome_embed(interaction.user)
             await channel.send(embed=embed)
             await interaction.followup.send(
-                f"✅ Mensagem de boas-vindas enviada para {channel.mention}.",
+                f"✅ Mensagem de boas-vindas enviada em {channel.mention}.",
                 ephemeral=True
             )
-            logger.info(f"{interaction.user} executou /testwelcome.")
+            logger.info(
+                f"{interaction.user} (ID: {interaction.user.id}) "
+                "executou /testwelcome com sucesso."
+            )
         except discord.Forbidden:
             await interaction.followup.send(
                 f"❌ Sem permissão para enviar mensagem em {channel.mention}.",
@@ -127,7 +161,7 @@ class Welcome(commands.Cog):
             )
         except discord.HTTPException as e:
             await interaction.followup.send(
-                f"❌ Erro ao enviar mensagem: {e}",
+                f"❌ Erro ao enviar a mensagem: {e}",
                 ephemeral=True
             )
 
