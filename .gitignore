@@ -1,0 +1,46 @@
+# ─── Ambiente ───────────────────────────
+.env
+.venv/
+venv/
+env/
+
+# ─── Python ─────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# ─── Distribuição / Build ────────────────
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# ─── Ferramentas ─────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ─── IDEs ───────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ─── Sistema ────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Logs locais ────────────────────────
+*.log
+
+# ─── Dados locais ────────────────────────
+data/*.json
+data/*.db
+data/*.sqlite
