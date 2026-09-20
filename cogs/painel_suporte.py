@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import discord
@@ -11,7 +12,6 @@ logger = logging.getLogger("PainelSuporte")
 
 EMBED_COLOR = discord.Color(0xe03f3f)
 
-
 # ─────────────────────────────────────────
 # Estado: canais de suporte abertos
 # ─────────────────────────────────────────
@@ -20,7 +20,7 @@ active_support_channels: dict[int, int] = {}
 
 
 # ─────────────────────────────────────────
-# View do painel de suporte
+# Views
 # ─────────────────────────────────────────
 
 class PainelSuporteView(discord.ui.View):
@@ -116,7 +116,7 @@ async def handle_abrir_suporte(interaction: discord.Interaction):
     user = interaction.user
     guild = interaction.guild
 
-    # Verifica se já possui canal de suporte aberto
+    # Verifica se já possui canal aberto
     if user.id in active_support_channels:
         existing_channel = guild.get_channel(active_support_channels[user.id])
         if existing_channel:
@@ -129,7 +129,7 @@ async def handle_abrir_suporte(interaction: discord.Interaction):
         else:
             del active_support_channels[user.id]
 
-    # Busca a categoria dos tickets
+    # Busca a categoria
     category = guild.get_channel(config.TICKET_CATEGORY_ID)
     if category is None or not isinstance(category, discord.CategoryChannel):
         await interaction.response.send_message(
@@ -139,6 +139,7 @@ async def handle_abrir_suporte(interaction: discord.Interaction):
         logger.error(f"Categoria não encontrada (ID: {config.TICKET_CATEGORY_ID}).")
         return
 
+    # Defer antes de operações demoradas
     await interaction.response.defer(ephemeral=True)
 
     # Permissões do canal
@@ -168,15 +169,16 @@ async def handle_abrir_suporte(interaction: discord.Interaction):
 
     for role in guild.roles:
         if role.permissions.manage_guild or role.permissions.administrator:
-            overwrites[role] = discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                read_messages=True,
-                read_message_history=True,
-                manage_messages=True
-            )
+            if not role.is_bot_managed() and not role.is_integration():
+                overwrites[role] = discord.PermissionOverwrite(
+                    view_channel=True,
+                    send_messages=True,
+                    read_messages=True,
+                    read_message_history=True,
+                    manage_messages=True
+                )
 
-    # Sanitiza o nome
+    # Sanitiza o nome do canal
     safe_name = "".join(
         c if c.isalnum() or c in "-_" else "-"
         for c in user.display_name.lower()
@@ -207,9 +209,14 @@ async def handle_abrir_suporte(interaction: discord.Interaction):
         )
         return
 
+    # Registra o canal ativo
     active_support_channels[user.id] = support_channel.id
-    logger.info(f"Canal de suporte criado: #{support_channel.name} para {user} (ID: {user.id}).")
+    logger.info(
+        f"Canal de suporte criado: #{support_channel.name} "
+        f"para {user} (ID: {user.id})."
+    )
 
+    # Embed dentro do canal criado
     embed = discord.Embed(
         title="🎫 Canal de Suporte — Cards of Doons",
         description=(
@@ -228,6 +235,7 @@ async def handle_abrir_suporte(interaction: discord.Interaction):
         view=SupportChannelActionsView()
     )
 
+    # Confirma ao usuário via followup (ephemeral)
     await interaction.followup.send(
         f"✅ Seu canal de suporte foi criado: {support_channel.mention}",
         ephemeral=True
@@ -236,15 +244,25 @@ async def handle_abrir_suporte(interaction: discord.Interaction):
     await _send_support_log(
         guild=guild,
         bot=interaction.client,
-        description=f"🎫 **Canal de suporte aberto** por {user.mention}\nCanal: {support_channel.mention}",
+        description=(
+            f"🎫 **Canal de suporte aberto** por {user.mention}\n"
+            f"Canal: {support_channel.mention}"
+        ),
     )
 
 
 async def handle_fechar_suporte_request(interaction: discord.Interaction):
-    """Pede confirmação antes de fechar o canal de suporte."""
+    """Pede confirmação antes de fechar o canal."""
     channel = interaction.channel
 
-    if not isinstance(channel, discord.TextChannel) or not channel.name.startswith("suporte-"):
+    if not isinstance(channel, discord.TextChannel):
+        await interaction.response.send_message(
+            "❌ Erro ao identificar o canal.",
+            ephemeral=True
+        )
+        return
+
+    if not channel.name.startswith("suporte-"):
         await interaction.response.send_message(
             "❌ Este botão só pode ser usado dentro de um canal de suporte.",
             ephemeral=True
@@ -261,12 +279,11 @@ async def handle_fechar_suporte_request(interaction: discord.Interaction):
 
 async def handle_fechar_suporte_confirmed(interaction: discord.Interaction):
     """Fecha e deleta o canal de suporte."""
-    import asyncio
-
     channel = interaction.channel
     guild = interaction.guild
     closer = interaction.user
 
+    # Encontra o dono pelo channel_id
     owner_id = None
     for uid, cid in list(active_support_channels.items()):
         if cid == channel.id:
@@ -296,12 +313,18 @@ async def handle_fechar_suporte_confirmed(interaction: discord.Interaction):
     if owner_id and owner_id in active_support_channels:
         del active_support_channels[owner_id]
 
-    logger.info(f"Canal de suporte #{channel.name} fechado por {closer} (ID: {closer.id}).")
+    logger.info(
+        f"Canal de suporte #{channel.name} fechado por "
+        f"{closer} (ID: {closer.id})."
+    )
 
     await _send_support_log(
         guild=guild,
         bot=interaction.client,
-        description=f"🔒 **Canal de suporte fechado** por {closer.mention}\nCanal: `{channel.name}`",
+        description=(
+            f"🔒 **Canal de suporte fechado** por {closer.mention}\n"
+            f"Canal: `{channel.name}`"
+        ),
     )
 
     await asyncio.sleep(3)
@@ -320,13 +343,21 @@ async def handle_chamar_staff_suporte(interaction: discord.Interaction):
     guild = interaction.guild
     user = interaction.user
 
-    if not isinstance(channel, discord.TextChannel) or not channel.name.startswith("suporte-"):
+    if not isinstance(channel, discord.TextChannel):
+        await interaction.response.send_message(
+            "❌ Erro ao identificar o canal.",
+            ephemeral=True
+        )
+        return
+
+    if not channel.name.startswith("suporte-"):
         await interaction.response.send_message(
             "❌ Este botão só pode ser usado dentro de um canal de suporte.",
             ephemeral=True
         )
         return
 
+    # Busca menção de role de staff
     staff_mention = ""
     for role in guild.roles:
         if role.permissions.manage_guild or role.permissions.administrator:
@@ -351,12 +382,17 @@ async def handle_chamar_staff_suporte(interaction: discord.Interaction):
         embed=embed
     )
 
-    logger.info(f"Staff chamada em #{channel.name} por {user} (ID: {user.id}).")
+    logger.info(
+        f"Staff chamada em #{channel.name} por {user} (ID: {user.id})."
+    )
 
     await _send_support_log(
         guild=guild,
         bot=interaction.client,
-        description=f"🛡️ **Staff chamada** por {user.mention}\nCanal: {channel.mention}",
+        description=(
+            f"🛡️ **Staff chamada** por {user.mention}\n"
+            f"Canal: {channel.mention}"
+        ),
     )
 
 
@@ -375,7 +411,7 @@ async def _send_support_log(
 
     embed = discord.Embed(
         description=description,
-        color=discord.Color(0xe03f3f)
+        color=EMBED_COLOR
     )
     embed.set_footer(text="Cards of Doons | Log")
 
@@ -409,11 +445,7 @@ class PainelSuporte(commands.Cog):
             )
             return
 
-        await interaction.response.send_message(
-            "✅ Painel de suporte enviado.",
-            ephemeral=True
-        )
-
+        # Monta o embed do painel
         embed = discord.Embed(
             title="🛡️ SUPORTE OFICIAL — CARDS OF DOONS",
             description=(
@@ -435,13 +467,24 @@ class PainelSuporte(commands.Cog):
             text="Cards of Doons | Suporte • Um canal por usuário"
         )
 
+        # Responde de forma ephemeral confirmando o comando
+        await interaction.response.defer(ephemeral=True)
+
+        # Envia o painel publicamente no canal
         await interaction.channel.send(
             embed=embed,
             view=PainelSuporteView()
         )
 
+        # Confirma para o executor
+        await interaction.followup.send(
+            "✅ Painel de suporte enviado com sucesso.",
+            ephemeral=True
+        )
+
         logger.info(
-            f"{interaction.user} executou /painel_suporte em #{interaction.channel.name}."
+            f"{interaction.user} executou /painel_suporte "
+            f"em #{interaction.channel.name}."
         )
 
 
