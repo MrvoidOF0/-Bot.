@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import time
-from typing import Optional
 
 import discord
 from discord.ext import commands
@@ -12,7 +11,7 @@ from services.groq_service import groq_service
 logger = logging.getLogger("SupportAI")
 
 # ─────────────────────────────────────────
-# Armazenamento do contexto de cada ticket
+# Contexto isolado por ticket
 # ─────────────────────────────────────────
 # {channel_id: [{"role": "...", "content": "..."}]}
 ticket_histories: dict[int, list] = {}
@@ -20,27 +19,26 @@ ticket_histories: dict[int, list] = {}
 # ─────────────────────────────────────────
 # Rate limit por usuário
 # ─────────────────────────────────────────
-# {user_id: last_message_timestamp}
+# {user_id: timestamp_da_ultima_mensagem}
 user_last_message: dict[int, float] = {}
 
-# Tempo mínimo entre mensagens (segundos)
 RATE_LIMIT_SECONDS = 5.0
 
-# Tempo mínimo para a IA responder após a última mensagem (debounce)
+# Debounce: aguarda o usuário parar de digitar antes de acionar a IA
 AI_DEBOUNCE_SECONDS = 1.5
 
 
 class SupportAI(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Controle de debounce por canal: {channel_id: task}
+        # Controle de tarefas pendentes por canal: {channel_id: asyncio.Task}
         self._pending_tasks: dict[int, asyncio.Task] = {}
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         """Intercepta mensagens nos canais de ticket e aciona a IA."""
 
-        # Ignora bots (incluindo o próprio bot)
+        # Ignora mensagens de bots (incluindo o próprio bot)
         if message.author.bot:
             return
 
@@ -50,52 +48,59 @@ class SupportAI(commands.Cog):
 
         channel = message.channel
 
-        # Verifica se é um canal de ticket
+        # ── Verifica se é canal de ticket ──
+        if not isinstance(channel, discord.TextChannel):
+            return
+
         if not channel.name.startswith("ticket-"):
             return
 
-        # Verifica se o ticket está registrado como ativo
-        user_id = message.author.id
-        if active_tickets.get(user_id) != channel.id:
-            # Pode ser a staff escrevendo; ignora sem erro
-            # Mas se o canal tem algum ticket ativo, ainda processa
-            # Se não for o dono do ticket, ignora
-            is_ticket_owner = any(cid == channel.id for cid in active_tickets.values())
-            if not is_ticket_owner:
-                return
-            # Staff escrevendo — não ativa a IA
-            # Verifica se quem escreveu é staff
-            if isinstance(message.author, discord.Member):
-                if message.author.guild_permissions.manage_guild or \
-                   message.author.guild_permissions.administrator:
-                    return
+        # ── Verifica se o canal está registrado como ticket ativo ──
+        is_registered_ticket = any(
+            cid == channel.id for cid in active_tickets.values()
+        )
+        if not is_registered_ticket:
+            return
 
-        # Verifica se a IA está desativada neste ticket
+        # ── Se for staff escrevendo, não aciona a IA ──
+        if isinstance(message.author, discord.Member):
+            member = message.author
+            if (
+                member.guild_permissions.manage_guild
+                or member.guild_permissions.administrator
+                or member.guild_permissions.manage_channels
+            ):
+                return
+
+        # ── Verifica se a IA está desativada neste ticket ──
         if channel.id in ai_disabled_tickets:
             return
 
-        # ─── Rate limit ───
+        # ── Rate limit por usuário ──
+        user_id = message.author.id
         now = time.monotonic()
-        last = user_last_message.get(user_id, 0)
+        last = user_last_message.get(user_id, 0.0)
         elapsed = now - last
 
         if elapsed < RATE_LIMIT_SECONDS:
             remaining = round(RATE_LIMIT_SECONDS - elapsed, 1)
             try:
                 await channel.send(
-                    f"⏳ {message.author.mention}, aguarde **{remaining}s** antes de enviar outra mensagem.",
-                    delete_after=5
+                    f"⏳ {message.author.mention}, aguarde **{remaining}s** "
+                    "antes de enviar outra mensagem.",
+                    delete_after=6
                 )
             except (discord.Forbidden, discord.HTTPException):
                 pass
             return
 
+        # Registra o timestamp desta mensagem
         user_last_message[user_id] = now
 
-        # ─── Debounce ───
-        # Cancela tarefa pendente se existir (aguarda o usuário parar de digitar)
-        if channel.id in self._pending_tasks:
-            self._pending_tasks[channel.id].cancel()
+        # ── Debounce: cancela tarefa anterior e agenda nova ──
+        existing_task = self._pending_tasks.get(channel.id)
+        if existing_task and not existing_task.done():
+            existing_task.cancel()
 
         task = asyncio.create_task(
             self._process_ai_response(message, channel)
@@ -107,55 +112,66 @@ class SupportAI(commands.Cog):
         message: discord.Message,
         channel: discord.TextChannel
     ):
-        """Processa a resposta da IA com debounce."""
+        """Aguarda o debounce e processa a resposta da IA."""
         try:
+            # Aguarda o debounce antes de responder
             await asyncio.sleep(AI_DEBOUNCE_SECONDS)
 
-            # Verifica novamente se a IA ainda está ativa
+            # Revalida se a IA ainda está ativa após o debounce
             if channel.id in ai_disabled_tickets:
                 return
 
-            # Recupera ou inicializa o histórico do ticket
+            # Recupera ou inicializa o histórico isolado deste ticket
             history = ticket_histories.get(channel.id, [])
 
-            # Envia indicador de digitação
+            # Envia indicador de digitação enquanto processa
             async with channel.typing():
                 ai_response, updated_history = await groq_service.chat(
                     user_message=message.content,
                     history=history
                 )
 
-            # Atualiza o histórico
+            # Persiste o histórico atualizado
             ticket_histories[channel.id] = updated_history
 
-            # Envia a resposta
-            # Divide respostas longas em múltiplas mensagens
+            # ── Envia a resposta sem nenhum prefixo ──
+            if not ai_response:
+                return
+
             if len(ai_response) <= 2000:
                 try:
-                    await channel.send(f"🤖 {ai_response}")
+                    await channel.send(ai_response)
                 except (discord.Forbidden, discord.HTTPException) as e:
-                    logger.error(f"Erro ao enviar resposta da IA no canal {channel.id}: {e}")
+                    logger.error(
+                        f"Erro ao enviar resposta da IA no canal {channel.id}: {e}"
+                    )
             else:
-                # Divide a resposta em blocos de 1900 caracteres
-                chunks = [ai_response[i:i+1900] for i in range(0, len(ai_response), 1900)]
-                for i, chunk in enumerate(chunks):
-                    prefix = "🤖 " if i == 0 else ""
+                # Divide respostas longas em blocos de 1900 caracteres
+                chunks = [
+                    ai_response[i:i + 1900]
+                    for i in range(0, len(ai_response), 1900)
+                ]
+                for chunk in chunks:
                     try:
-                        await channel.send(f"{prefix}{chunk}")
+                        await channel.send(chunk)
                     except (discord.Forbidden, discord.HTTPException) as e:
                         logger.error(f"Erro ao enviar chunk da IA: {e}")
                         break
 
             logger.info(
-                f"IA respondeu no ticket {channel.name} para {message.author}. "
+                f"IA respondeu em #{channel.name} para {message.author}. "
                 f"Histórico: {len(updated_history)} mensagens."
             )
 
         except asyncio.CancelledError:
-            # Tarefa cancelada pelo debounce — normal
+            # Cancelado pelo debounce — comportamento esperado
             pass
+
         except Exception as e:
-            logger.error(f"Erro inesperado no _process_ai_response: {e}", exc_info=True)
+            logger.error(
+                f"Erro inesperado em _process_ai_response: {e}",
+                exc_info=True
+            )
             try:
                 await channel.send(
                     "⚠️ O atendimento automático encontrou um erro inesperado. "
@@ -163,17 +179,17 @@ class SupportAI(commands.Cog):
                 )
             except (discord.Forbidden, discord.HTTPException):
                 pass
+
         finally:
-            # Remove a tarefa do registro
-            if channel.id in self._pending_tasks:
-                del self._pending_tasks[channel.id]
+            # Limpa a tarefa do registro ao finalizar
+            self._pending_tasks.pop(channel.id, None)
 
 
 def clear_ticket_history(channel_id: int):
-    """Remove o histórico de um ticket quando ele é fechado."""
+    """Remove o histórico de conversa de um ticket encerrado."""
     if channel_id in ticket_histories:
         del ticket_histories[channel_id]
-        logger.info(f"Histórico do ticket {channel_id} limpo.")
+        logger.info(f"Histórico do ticket #{channel_id} removido da memória.")
 
 
 async def setup(bot: commands.Bot):
