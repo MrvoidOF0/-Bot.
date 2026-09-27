@@ -139,7 +139,6 @@ class Commands(commands.Cog):
         falha = 0
 
         for member in interaction.guild.members:
-            # Pula bots e usuários que já possuem o cargo
             if member.bot or role in member.roles:
                 continue
 
