@@ -10,6 +10,7 @@ from utils.permissions import is_staff_interaction
 logger = logging.getLogger("Commands")
 
 EMBED_COLOR = discord.Color(0xe03f3f)
+ROLE_ALL_ID = 1551210705531707453
 
 
 class Commands(commands.Cog):
@@ -35,6 +36,15 @@ class Commands(commands.Cog):
             value=(
                 "Exibe este painel de ajuda.\n"
                 "**Quem pode usar:** Todos os membros."
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="👑 `/roleall`",
+            value=(
+                "Atribui o cargo padrão a todos os membros do servidor.\n"
+                "**Quem pode usar:** Apenas Administradores."
             ),
             inline=False
         )
@@ -103,6 +113,56 @@ class Commands(commands.Cog):
         logger.info(f"{interaction.user} (ID: {interaction.user.id}) usou /help.")
 
     @app_commands.command(
+        name="roleall",
+        description="[ADMIN] Atribui o cargo padrão (1551210705531707453) a todos os membros."
+    )
+    async def role_all(self, interaction: discord.Interaction):
+        """Atribui o cargo configurado a todos os membros do servidor."""
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ Apenas administradores podem usar este comando.",
+                ephemeral=True
+            )
+            return
+
+        role = interaction.guild.get_role(ROLE_ALL_ID)
+        if not role:
+            await interaction.response.send_message(
+                f"❌ O cargo com ID `{ROLE_ALL_ID}` não foi encontrado no servidor.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        sucesso = 0
+        falha = 0
+
+        for member in interaction.guild.members:
+            # Pula bots e usuários que já possuem o cargo
+            if member.bot or role in member.roles:
+                continue
+
+            try:
+                await member.add_roles(role, reason=f"Atribuído por /roleall por {interaction.user}")
+                sucesso += 1
+            except (discord.Forbidden, discord.HTTPException):
+                falha += 1
+
+        await interaction.followup.send(
+            f"✅ **Atribuição concluída!**\n"
+            f"• Cargo: **{role.name}**\n"
+            f"• Membros atualizados: **{sucesso}**\n"
+            f"• Falhas/Sem permissão: **{falha}**",
+            ephemeral=True
+        )
+
+        logger.info(
+            f"{interaction.user} executou /roleall. "
+            f"Adicionado a {sucesso} membros, {falha} falhas."
+        )
+
+    @app_commands.command(
         name="ai",
         description="[STAFF] Testa a IA de suporte com uma pergunta."
     )
@@ -161,7 +221,6 @@ class Commands(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            # Sincroniza globalmente
             synced = await self.bot.tree.sync()
 
             cmd_list = "\n".join(f"• `/{c.name}`" for c in synced)
